@@ -1,6 +1,9 @@
 """
-ManiSkill3 Panda Keyframe Solution using PD Arm Joint / EE Control.
-No mplib dependency. Solves PickCube-v1 deterministically.
+Scripted Pick-and-Place Baseline Policy for ManiSkill3 (Panda Arm).
+
+Empirically Verified Gripper Convention:
+- action[6] = -1.0 -> CLOSE gripper fingers
+- action[6] = +1.0 -> OPEN gripper fingers
 """
 
 import numpy as np
@@ -14,7 +17,7 @@ class ScriptedPickPlacePolicy:
         self.reset()
         
     def reset(self):
-        self.stage = 0
+        self.stage = 0  # 0: approach, 1: descend, 2: grasp, 3: lift, 4: move_to_goal, 5: release
         self.step_count = 0
         
     def get_action(self, obs, info=None):
@@ -30,64 +33,66 @@ class ScriptedPickPlacePolicy:
         extra = obs["extra"]
         tcp_pos = to_np(extra["tcp_pose"])[:3]
         obj_pos = to_np(extra["obj_pose"])[:3]
-        goal_pos = to_np(extra["goal_pos"])[:3] if "goal_pos" in extra else obj_pos + np.array([0.0, 0.0, 0.15])
+        goal_pos = to_np(extra["goal_pos"])[:3] if "goal_pos" in extra else obj_pos + np.array([0.0, 0.0, 0.2])
         
         delta_pos = np.zeros(3)
-        gripper_action = -1.0
+        gripper_action = 1.0  # +1.0 OPEN gripper
         
-        # State machine sequence using relative pose targets
         if self.stage == 0:
-            # Stage 0: Fast XY approach over object (z offset +0.06m)
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.06])
+            # Stage 0: Move TCP above object (hover target z = obj_z + 0.10m)
+            target = obj_pos + np.array([0.0, 0.0, 0.10])
             diff = target - tcp_pos
-            delta_pos = diff * 15.0
-            if np.linalg.norm(diff[:2]) < 0.008 or self.step_count > 15:
+            if np.linalg.norm(diff) < 0.02 or self.step_count > 30:
                 self.stage = 1
                 self.step_count = 0
+            else:
+                delta_pos = diff * 5.0
                 
         elif self.stage == 1:
-            # Stage 1: Descend onto object (z target = obj_z + 0.008m)
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.008])
+            # Stage 1: Descend down to cube position (z = obj_z + 0.015m)
+            target = obj_pos + np.array([0.0, 0.0, 0.015])
             diff = target - tcp_pos
-            delta_pos = diff * 15.0
-            if abs(diff[2]) < 0.005 or self.step_count > 15:
+            if np.linalg.norm(diff) < 0.015 or self.step_count > 25:
                 self.stage = 2
                 self.step_count = 0
+            else:
+                delta_pos = diff * 5.0
                 
         elif self.stage == 2:
-            # Stage 2: Close gripper firmly
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.008])
-            diff = target - tcp_pos
-            delta_pos = diff * 5.0
-            gripper_action = 1.0  # Close fingers
+            # Stage 2: Close gripper to grasp
+            target = obj_pos + np.array([0.0, 0.0, 0.015])
+            delta_pos = (target - tcp_pos) * 2.0
+            gripper_action = -1.0  # -1.0 CLOSE gripper
             if self.step_count > 15:
                 self.stage = 3
                 self.step_count = 0
                 
         elif self.stage == 3:
-            # Stage 3: Lift object
-            target = np.array([tcp_pos[0], tcp_pos[1], 0.25])
+            # Stage 3: Lift cube up
+            target = obj_pos + np.array([0.0, 0.0, 0.25])
             diff = target - tcp_pos
-            delta_pos = diff * 12.0
-            gripper_action = 1.0
-            if tcp_pos[2] > 0.18 or self.step_count > 20:
+            gripper_action = -1.0  # Keep gripper closed (-1.0)
+            if (np.linalg.norm(diff[:2]) < 0.03 and tcp_pos[2] > 0.20) or self.step_count > 35:
                 self.stage = 4
                 self.step_count = 0
+            else:
+                delta_pos = diff * 4.0
                 
         elif self.stage == 4:
-            # Stage 4: Transport to goal
-            target = goal_pos + np.array([0.0, 0.0, 0.03])
+            # Stage 4: Move to target goal position
+            target = goal_pos
             diff = target - tcp_pos
-            delta_pos = diff * 12.0
-            gripper_action = 1.0
-            if np.linalg.norm(diff) < 0.02 or self.step_count > 25:
+            gripper_action = -1.0  # Keep gripper closed (-1.0)
+            if np.linalg.norm(diff) < 0.03 or self.step_count > 40:
                 self.stage = 5
                 self.step_count = 0
+            else:
+                delta_pos = diff * 4.0
                 
         elif self.stage == 5:
-            # Stage 5: Release
+            # Stage 5: Release gripper at goal position
             delta_pos = np.zeros(3)
-            gripper_action = -1.0
+            gripper_action = 1.0  # +1.0 OPEN gripper
             
         delta_pos = np.clip(delta_pos, -1.0, 1.0)
         action = np.array([delta_pos[0], delta_pos[1], delta_pos[2], 0.0, 0.0, 0.0, gripper_action], dtype=np.float32)
