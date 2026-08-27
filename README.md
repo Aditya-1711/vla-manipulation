@@ -1,36 +1,74 @@
-# VLA Fine-Tuning for Robotic Manipulation
+# SmolVLA Robotic Manipulation Pipeline (ManiSkill3 + LeRobot)
 
-Fine-tuning an open-source Vision-Language-Action (VLA) model (**SmolVLA**, 450M parameters) on a pick-and-place task in simulation (**ManiSkill3** / **LeRobot**), comparing performance and generalization against a classical IK/motion-planning baseline.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg)](https://pytorch.org/)
 
-## Project Structure
+An end-to-end Vision-Language-Action (VLA) manipulation pipeline fine-tuning **SmolVLA** (500M parameters) on **ManiSkill3 PickCube-v1** using **HuggingFace LeRobot**.
 
+---
+
+## 📌 Features
+
+- **Phase 0 & 1: Baseline Simulation**: Scripted pick-and-place policy achieving **95% In-Distribution** and **100% Generalization** success on ManiSkill3 Franka `PickCube-v1`.
+- **Phase 2: Demonstration Collection**: Rebalanced 60-episode dataset containing 2,988 frames with 7D TCP state (`observation.state`) and RGB observations formatted for LeRobot.
+- **Phase 3: VLA Fine-Tuning**: Integration with `lerobot/smolvla_base` fine-tuning pipeline, logging loss progression from 2.092 to 0.264 (~87.4% reduction).
+- **Phase 4: Decoupled Rollout & Evaluation**: Official 3-step preprocessor $\to$ policy $\to$ postprocessor inference pipeline evaluating 35 benchmark seeds across 4 categories:
+  - Seen Training Seeds (10 seeds)
+  - Verified In-Distribution Unseen Seeds (5 seeds)
+  - Verified Generalization Unseen Seeds (10 seeds)
+  - Fresh Held-Out Unseen Seeds (10 seeds)
+
+---
+
+## 🛠️ Installation
+
+```bash
+# Clone repository
+git clone https://github.com/Aditya-1711/vla-manipulation.git
+cd vla-manipulation
+
+# Install core dependencies
+pip install "numpy>=2.0.0,<2.3.0"
+pip install "lerobot[dataset]" av wandb num2words
+pip install --no-deps mani_skill
+pip install pytorch_kinematics_ms arm_pytorch_utilities nvidia-ml-py
+pip install gymnasium h5py trimesh transforms3d pandas sapien dacite GitPython tyro
 ```
-.
-├── README.md                  # Problem statement, results summary, demo clip
-├── sim_env/
-│   ├── task_def.py            # ManiSkill3 pick-place task + randomization config
-│   └── scripted_baseline.py   # IK/motion-planning baseline policy
-├── data_collection/
-│   ├── collect_demos.py       # Scripted or teleoperated demo recording → LeRobot dataset format
-│   └── dataset_stats.py       # Sanity checks: episode count per variation, replay validation
-├── training/
-│   ├── finetune_config.yaml   # lerobot-train config (policy, dataset, steps, batch size)
-│   └── train.sh               # Wraps lerobot-train invocation
-├── evaluation/
-│   ├── eval_suite.py          # Runs both policies across in-distribution + generalization trials
-│   ├── metrics.py             # Success rate, grasp success, completion time, failure tags
-│   └── results/                # Raw logs, CSVs, plots
-├── media/
-│   └── demo_comparison.mp4    # Side-by-side rollout clip
-└── docs/
-    └── writeup.md             # Final report: method, results, failure analysis
+
+---
+
+## 🚀 Usage
+
+### 1. Fine-Tuning SmolVLA Policy
+```bash
+lerobot-train \
+  --policy.path=lerobot/smolvla_base \
+  --policy.push_to_hub=false \
+  --dataset.repo_id=local/pick_cube_rebalanced \
+  --dataset.root="./data/lerobot_pick_cube" \
+  '--rename_map={"observation.image": "observation.images.camera1"}' \
+  --output_dir="./checkpoints/smolvla_pickcube_60ep_8k" \
+  --batch_size=4 \
+  --optimizer.lr=1e-4 \
+  --steps=8000 \
+  --save_freq=1000 \
+  --log_freq=20 \
+  --wandb.enable=false
 ```
 
-## Phased Workflow Progress
+### 2. Single Episode Diagnostic Rollout
+```bash
+python evaluation/eval_seed1000_full_trace.py
+```
 
-- [x] **Phase 0**: Repo Scaffolding & Setup
-- [ ] **Phase 1**: Task Definition & Scripted Baseline
-- [ ] **Phase 2**: Demonstration Data Collection & Replay Validation
-- [ ] **Phase 3**: SmolVLA Fine-Tuning Pipeline
-- [ ] **Phase 4**: In-Distribution & Generalization Evaluation Suite
-- [ ] **Phase 5**: Results Summary & Side-by-Side Demo
+### 3. Complete 35-Seed Benchmark Evaluation
+```bash
+python evaluation/eval_full_matrix.py
+```
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

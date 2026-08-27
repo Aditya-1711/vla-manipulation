@@ -1,41 +1,31 @@
 """
-ManiSkill3 Pick-and-Place Task Definition with Domain Randomization Configuration.
-
-Defines In-Distribution and Out-of-Distribution / Generalization trial suites.
+ManiSkill3 PickCube-v1 Source & Custom Task Subclassing.
 """
 
-import numpy as np
 import gymnasium as gym
+import mani_skill.envs
+from mani_skill.envs.tasks.tabletop.pick_cube import PickCubeEnv
+from mani_skill.utils.building.ground import build_ground
+import torch
 
-class PickPlaceTaskConfig:
-    """Task configuration parameters and domain randomization boundaries."""
-    ENV_ID = "PickCube-v1"
-    ROBOT = "panda"
-    IMAGE_OBS_SIZE = (224, 224)
-    
-    # In-Distribution Randomization Range (Cube starting XY offset bounds in meters)
-    # Matching dataset demo collection distribution (Seeds 1000-1049)
-    IN_DIST_OBJ_POS_X = (-0.05, 0.05)
-    IN_DIST_OBJ_POS_Y = (-0.05, 0.05)
-    
-    # Out-of-Distribution / Generalization Randomization Ranges
-    # Novel un-seen object starting positions (extrapolated bounds)
-    OOD_OBJ_POS_X = (-0.15, 0.15)
-    OOD_OBJ_POS_Y = (-0.15, 0.15)
-    
-    # Seed allocations for benchmark evaluation suites
-    IN_DIST_SEEDS = list(range(1000, 1020))  # Seeds 1000-1019
-    OOD_SEEDS = list(range(2000, 2020))      # Seeds 2000-2019
-
-def make_env(env_id=PickPlaceTaskConfig.ENV_ID, obs_mode="state_dict", control_mode="pd_ee_delta_pose", render_mode="rgb_array", seed=None):
-    """Factory helper to create ManiSkill3 environment instance."""
-    import mani_skill.envs
-    env = gym.make(
-        env_id,
-        obs_mode=obs_mode,
-        control_mode=control_mode,
-        render_mode=render_mode
-    )
-    if seed is not None:
-        env.reset(seed=seed)
-    return env
+class CustomPickCubeEnv(PickCubeEnv):
+    """
+    Subclassed ManiSkill3 PickCubeEnv allowing explicit obj_xy_range configuration.
+    """
+    def __init__(self, *args, obj_xy_range=(-0.05, 0.05), **kwargs):
+        self.obj_xy_range = obj_xy_range
+        super().__init__(*args, **kwargs)
+        
+    def _initialize_episode(self, env_idx, options):
+        # Override _initialize_episode to use self.obj_xy_range
+        with torch.device(self.device):
+            b = len(env_idx)
+            self._initialize_transforms(env_idx)
+            
+            # Sample cube position within explicit range
+            xyz = torch.zeros((b, 3))
+            xyz[:, 0] = torch.rand(b) * (self.obj_xy_range[1] - self.obj_xy_range[0]) + self.obj_xy_range[0]
+            xyz[:, 1] = torch.rand(b) * (self.obj_xy_range[1] - self.obj_xy_range[0]) + self.obj_xy_range[0]
+            xyz[:, 2] = 0.02
+            
+            self.cube.set_pose(mani_skill.utils.structs.Pose.create_from_pq(p=xyz))

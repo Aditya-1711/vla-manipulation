@@ -1,22 +1,22 @@
-# Python / Byte-compiled / module files
+# Byte-compiled / Python data
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Environments
-.venv
-env/
-venv/
-ENV/
-
-# Data & Checkpoints
-data/
-outputs/
+# Checkpoints and large binaries
 checkpoints/
-*.png
-*.mp4
-*.csv
+*.safetensors
+*.bin
+*.pth
+*.pt
+*.h5
 
-# OS specific
+# Datasets
+data/
+
+# IDE & OS files
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+maniskill_verification_frame.png

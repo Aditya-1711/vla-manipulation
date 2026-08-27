@@ -1,12 +1,26 @@
-# Fine-tuning config for lerobot-train (SmolVLA)
+# SmolVLA Fine-Tuning Configuration - ManiSkill3 PickCube-v1 (Colab T4 Optimized)
+# Target Hardware: Tesla T4 (15 GB VRAM)
+# Dataset: 60 Episodes (~2,988 frames) with 7-dim TCP state + 128x128 RGB camera
+
 dataset:
-  repo_id: "local/mani_pick_place"
+  root: "/content/drive/MyDrive/vla-manipulation/data/lerobot_pick_cube"
+  repo_id: "local/pick_cube_rebalanced"
+
 policy:
   path: "lerobot/smolvla_base"
-training:
-  steps: 20000
-  batch_size: 8
-  learning_rate: 1.0e-4
-  save_freq: 5000
-  wandb:
-    enable: true
+  push_to_hub: false           # Save model checkpoints locally on disk only (do not push to HF Hub)
+
+rename_map:
+  "observation.image": "observation.images.camera1"
+
+steps: 2000                   # 2000 steps (~5.3 epochs over 2,988 frames with batch_size 4). Prevents severe overfitting on 60 episodes.
+save_freq: 500               # Save checkpoint every 500 steps to protect against Colab disconnects.
+log_freq: 20                 # Log metrics every 20 steps to console.
+batch_size: 4                # Conservative batch size of 4 for 15GB T4 VRAM.
+
+optimizer:
+  lr: 1e-4
+  weight_decay: 1e-10
+
+wandb:
+  enable: false                # Set to false if WANDB_API_KEY is not configured
