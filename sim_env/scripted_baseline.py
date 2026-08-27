@@ -1,10 +1,12 @@
 """
 Scripted Pick-and-Place Baseline Policy for ManiSkill3 (Panda Arm).
 
-Refined State-Machine:
-1. Tight XY alignment threshold (< 0.008m) before descending.
-2. Extended grasp-and-settle holding phase in Stage 2.
-3. Explicit check on is_grasped before advancing from Stage 2 (grasp) to Stage 3 (lift).
+Calibrated using ManiSkill3 keyframe motion sequence:
+- Stage 0: Reach & Align above cube
+- Stage 1: Descend & Open fingers
+- Stage 2: Settle & Close fingers
+- Stage 3: Lift cube
+- Stage 4: Transport to goal
 """
 
 import numpy as np
@@ -18,13 +20,10 @@ class ScriptedPickPlacePolicy:
         self.reset()
         
     def reset(self):
-        self.stage = 0  # 0: approach, 1: descend, 2: grasp, 3: lift, 4: move_to_goal, 5: release
+        self.stage = 0
         self.step_count = 0
         
     def get_action(self, obs, info=None):
-        """
-        Computes delta end-effector target action [dx, dy, dz, droll, dpitch, dyaw, gripper].
-        """
         self.step_count += 1
         
         def to_np3(val):
@@ -40,9 +39,8 @@ class ScriptedPickPlacePolicy:
         goal_pos = to_np3(extra["goal_pos"]) if "goal_pos" in extra else obj_pos + np.array([0.0, 0.0, 0.15])
         
         delta_pos = np.zeros(3)
-        gripper_action = -1.0  # -1 open, 1 close
+        gripper_action = -1.0
         
-        # Extract is_grasped from info if available
         is_grasped = False
         if info is not None and isinstance(info, dict):
             ig = info.get("is_grasped", False)
@@ -52,46 +50,38 @@ class ScriptedPickPlacePolicy:
                 is_grasped = bool(ig)
                 
         if self.stage == 0:
-            # Stage 0: Approach - Position TCP directly over cube XY (hover at obj_z + 0.05)
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.05])
+            # Stage 0: Align XY above cube
+            target = np.array([obj_pos[0], obj_pos[1], tcp_pos[2]])
             diff = target - tcp_pos
-            xy_dist = np.linalg.norm(diff[:2])
-            
-            # Tightened transition requirement: XY alignment must be < 0.008m
-            if xy_dist < 0.008 or self.step_count > 45:
+            if np.linalg.norm(diff[:2]) < 0.005 or self.step_count > 30:
                 self.stage = 1
                 self.step_count = 0
             else:
-                delta_pos = diff * 8.0
+                delta_pos[:2] = diff[:2] * 10.0
                 
         elif self.stage == 1:
-            # Stage 1: Descend - Lower TCP around cube
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] - 0.005])
+            # Stage 1: Descend down onto cube
+            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.002])
             diff = target - tcp_pos
-            if np.linalg.norm(diff) < 0.008 or self.step_count > 30:
+            if np.linalg.norm(diff) < 0.005 or self.step_count > 25:
                 self.stage = 2
                 self.step_count = 0
             else:
-                delta_pos = diff * 8.0
+                delta_pos = diff * 10.0
                 
         elif self.stage == 2:
-            # Stage 2: Grasp & Settle - Hold position while closing gripper
-            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] - 0.005])
-            diff = target - tcp_pos
-            delta_pos = diff * 3.0
-            gripper_action = 1.0  # Close fingers firmly
-            
-            # Transition to Stage 3 only if object is grasped OR step timeout reached (>25 steps)
-            if is_grasped or self.step_count > 25:
+            # Stage 2: Settle and Close Gripper
+            gripper_action = 1.0
+            if is_grasped or self.step_count > 30:
                 self.stage = 3
                 self.step_count = 0
                 
         elif self.stage == 3:
-            # Stage 3: Lift - Raise object up high
+            # Stage 3: Lift
             target = np.array([tcp_pos[0], tcp_pos[1], 0.25])
             diff = target - tcp_pos
             gripper_action = 1.0
-            if tcp_pos[2] > 0.18 or self.step_count > 35:
+            if tcp_pos[2] > 0.20 or self.step_count > 35:
                 self.stage = 4
                 self.step_count = 0
             else:
@@ -99,7 +89,7 @@ class ScriptedPickPlacePolicy:
                 
         elif self.stage == 4:
             # Stage 4: Move to Goal
-            target = goal_pos + np.array([0.0, 0.0, 0.04])
+            target = goal_pos
             diff = target - tcp_pos
             gripper_action = 1.0
             if np.linalg.norm(diff) < 0.02 or self.step_count > 40:
@@ -109,7 +99,6 @@ class ScriptedPickPlacePolicy:
                 delta_pos = diff * 8.0
                 
         elif self.stage == 5:
-            # Stage 5: Release gripper at goal position
             delta_pos = np.zeros(3)
             gripper_action = -1.0
             
