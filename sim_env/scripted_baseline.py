@@ -1,6 +1,6 @@
 """
-ManiSkill3 Keyframe Trajectory Policy for PickCube-v1.
-No mplib required. Uses exact keyframe relative delta control.
+ManiSkill3 Panda Keyframe Solution using PD Arm Joint / EE Control.
+No mplib dependency. Solves PickCube-v1 deterministically.
 """
 
 import numpy as np
@@ -20,81 +20,72 @@ class ScriptedPickPlacePolicy:
     def get_action(self, obs, info=None):
         self.step_count += 1
         
-        def to_np3(val):
+        def to_np(val):
             if isinstance(val, torch.Tensor):
                 val = val.cpu().numpy()
             if val.ndim > 1:
                 val = val[0]
-            return val[:3]
+            return val
             
         extra = obs["extra"]
-        tcp_pos = to_np3(extra["tcp_pose"])
-        obj_pos = to_np3(extra["obj_pose"])
-        goal_pos = to_np3(extra["goal_pos"]) if "goal_pos" in extra else obj_pos + np.array([0.0, 0.0, 0.15])
+        tcp_pos = to_np(extra["tcp_pose"])[:3]
+        obj_pos = to_np(extra["obj_pose"])[:3]
+        goal_pos = to_np(extra["goal_pos"])[:3] if "goal_pos" in extra else obj_pos + np.array([0.0, 0.0, 0.15])
         
         delta_pos = np.zeros(3)
         gripper_action = -1.0
         
-        is_grasped = False
-        if info is not None and isinstance(info, dict):
-            ig = info.get("is_grasped", False)
-            if isinstance(ig, torch.Tensor):
-                is_grasped = ig.any().item()
-            else:
-                is_grasped = bool(ig)
-                
+        # State machine sequence using relative pose targets
         if self.stage == 0:
-            # Stage 0: Align XY directly over object
-            target_xy = obj_pos[:2]
-            diff_xy = target_xy - tcp_pos[:2]
-            delta_pos[0] = diff_xy[0] * 10.0
-            delta_pos[1] = diff_xy[1] * 10.0
-            delta_pos[2] = 0.0  # Keep height constant during alignment
-            
-            if np.linalg.norm(diff_xy) < 0.005 or self.step_count > 20:
+            # Stage 0: Fast XY approach over object (z offset +0.06m)
+            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.06])
+            diff = target - tcp_pos
+            delta_pos = diff * 15.0
+            if np.linalg.norm(diff[:2]) < 0.008 or self.step_count > 15:
                 self.stage = 1
                 self.step_count = 0
                 
         elif self.stage == 1:
-            # Stage 1: Descend vertically to object grasp position
-            target_z = obj_pos[2] + 0.002
-            diff_z = target_z - tcp_pos[2]
-            delta_pos[2] = diff_z * 10.0
-            
-            if abs(diff_z) < 0.005 or self.step_count > 20:
+            # Stage 1: Descend onto object (z target = obj_z + 0.008m)
+            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.008])
+            diff = target - tcp_pos
+            delta_pos = diff * 15.0
+            if abs(diff[2]) < 0.005 or self.step_count > 15:
                 self.stage = 2
                 self.step_count = 0
                 
         elif self.stage == 2:
-            # Stage 2: Close gripper
-            gripper_action = 1.0
-            if is_grasped or self.step_count > 25:
+            # Stage 2: Close gripper firmly
+            target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.008])
+            diff = target - tcp_pos
+            delta_pos = diff * 5.0
+            gripper_action = 1.0  # Close fingers
+            if self.step_count > 15:
                 self.stage = 3
                 self.step_count = 0
                 
         elif self.stage == 3:
-            # Stage 3: Lift up
-            target_z = 0.25
-            diff_z = target_z - tcp_pos[2]
-            delta_pos[2] = diff_z * 8.0
+            # Stage 3: Lift object
+            target = np.array([tcp_pos[0], tcp_pos[1], 0.25])
+            diff = target - tcp_pos
+            delta_pos = diff * 12.0
             gripper_action = 1.0
-            
-            if tcp_pos[2] > 0.18 or self.step_count > 30:
+            if tcp_pos[2] > 0.18 or self.step_count > 20:
                 self.stage = 4
                 self.step_count = 0
                 
         elif self.stage == 4:
-            # Stage 4: Move to Goal
-            target = goal_pos
+            # Stage 4: Transport to goal
+            target = goal_pos + np.array([0.0, 0.0, 0.03])
             diff = target - tcp_pos
-            delta_pos = diff * 8.0
+            delta_pos = diff * 12.0
             gripper_action = 1.0
-            
-            if np.linalg.norm(diff) < 0.02 or self.step_count > 40:
+            if np.linalg.norm(diff) < 0.02 or self.step_count > 25:
                 self.stage = 5
                 self.step_count = 0
                 
         elif self.stage == 5:
+            # Stage 5: Release
             delta_pos = np.zeros(3)
             gripper_action = -1.0
             
