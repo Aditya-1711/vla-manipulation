@@ -1,0 +1,12 @@
+# Fine-tuning config for lerobot-train (SmolVLA)
+dataset:
+  repo_id: "local/mani_pick_place"
+policy:
+  path: "lerobot/smolvla_base"
+training:
+  steps: 20000
+  batch_size: 8
+  learning_rate: 1.0e-4
+  save_freq: 5000
+  wandb:
+    enable: true

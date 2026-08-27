@@ -1,0 +1,22 @@
+# Python / Byte-compiled / module files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv
+env/
+venv/
+ENV/
+
+# Data & Checkpoints
+data/
+outputs/
+checkpoints/
+*.png
+*.mp4
+*.csv
+
+# OS specific
+.DS_Store
+Thumbs.db
