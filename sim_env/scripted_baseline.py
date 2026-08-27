@@ -1,9 +1,10 @@
 """
 Scripted Pick-and-Place Baseline Policy for ManiSkill3 (Panda Arm).
 
-Calibrated based on ManiSkill3 single-agent action space (Box(7,)):
-- Action space shape: (7,) [dx, dy, dz, droll, dpitch, dyaw, gripper]
-- TCP descent height: z = 0.015m (cube center height is 0.020m)
+Refined State-Machine:
+1. Tight XY alignment threshold (< 0.008m) before descending.
+2. Extended grasp-and-settle holding phase in Stage 2.
+3. Explicit check on is_grasped before advancing from Stage 2 (grasp) to Stage 3 (lift).
 """
 
 import numpy as np
@@ -20,7 +21,7 @@ class ScriptedPickPlacePolicy:
         self.stage = 0  # 0: approach, 1: descend, 2: grasp, 3: lift, 4: move_to_goal, 5: release
         self.step_count = 0
         
-    def get_action(self, obs):
+    def get_action(self, obs, info=None):
         """
         Computes delta end-effector target action [dx, dy, dz, droll, dpitch, dyaw, gripper].
         """
@@ -41,38 +42,52 @@ class ScriptedPickPlacePolicy:
         delta_pos = np.zeros(3)
         gripper_action = -1.0  # -1 open, 1 close
         
+        # Extract is_grasped from info if available
+        is_grasped = False
+        if info is not None and isinstance(info, dict):
+            ig = info.get("is_grasped", False)
+            if isinstance(ig, torch.Tensor):
+                is_grasped = ig.any().item()
+            else:
+                is_grasped = bool(ig)
+                
         if self.stage == 0:
-            # Approach: position TCP directly over cube XY (hover at z = obj_z + 0.05 = ~0.07m)
+            # Stage 0: Approach - Position TCP directly over cube XY (hover at obj_z + 0.05)
             target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] + 0.05])
             diff = target - tcp_pos
-            if np.linalg.norm(diff) < 0.015 or self.step_count > 25:
+            xy_dist = np.linalg.norm(diff[:2])
+            
+            # Tightened transition requirement: XY alignment must be < 0.008m
+            if xy_dist < 0.008 or self.step_count > 45:
                 self.stage = 1
                 self.step_count = 0
             else:
                 delta_pos = diff * 8.0
                 
         elif self.stage == 1:
-            # Descend: lower fingers down around cube (target z = obj_z - 0.005 = ~0.015m)
+            # Stage 1: Descend - Lower TCP around cube
             target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] - 0.005])
             diff = target - tcp_pos
-            if np.linalg.norm(diff) < 0.010 or self.step_count > 20:
+            if np.linalg.norm(diff) < 0.008 or self.step_count > 30:
                 self.stage = 2
                 self.step_count = 0
             else:
                 delta_pos = diff * 8.0
                 
         elif self.stage == 2:
-            # Grasp: close gripper fingers
+            # Stage 2: Grasp & Settle - Hold position while closing gripper
             target = np.array([obj_pos[0], obj_pos[1], obj_pos[2] - 0.005])
             diff = target - tcp_pos
             delta_pos = diff * 3.0
-            gripper_action = 1.0  # Close fingers
-            if self.step_count > 15:
+            gripper_action = 1.0  # Close fingers firmly
+            
+            # Transition to Stage 3 only if object is grasped OR step timeout reached (>25 steps)
+            if is_grasped or self.step_count > 25:
                 self.stage = 3
                 self.step_count = 0
                 
         elif self.stage == 3:
-            # Lift: raise cube high
+            # Stage 3: Lift - Raise object up high
             target = np.array([tcp_pos[0], tcp_pos[1], 0.25])
             diff = target - tcp_pos
             gripper_action = 1.0
@@ -83,7 +98,7 @@ class ScriptedPickPlacePolicy:
                 delta_pos = diff * 8.0
                 
         elif self.stage == 4:
-            # Move to Goal position
+            # Stage 4: Move to Goal
             target = goal_pos + np.array([0.0, 0.0, 0.04])
             diff = target - tcp_pos
             gripper_action = 1.0
@@ -94,14 +109,13 @@ class ScriptedPickPlacePolicy:
                 delta_pos = diff * 8.0
                 
         elif self.stage == 5:
-            # Release cube at goal
+            # Stage 5: Release gripper at goal position
             delta_pos = np.zeros(3)
             gripper_action = -1.0
             
         delta_pos = np.clip(delta_pos, -1.0, 1.0)
         action = np.array([delta_pos[0], delta_pos[1], delta_pos[2], 0.0, 0.0, 0.0, gripper_action], dtype=np.float32)
         
-        # If env is vectorized (batch_size > 1), match batch dimension
         if isinstance(extra["tcp_pose"], torch.Tensor) and extra["tcp_pose"].ndim > 1:
             action = torch.tensor(action, device=extra["tcp_pose"].device).unsqueeze(0)
             
